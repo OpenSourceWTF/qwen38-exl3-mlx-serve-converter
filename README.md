@@ -3,7 +3,8 @@
 These scripts convert turboderp's EXL3 quantizations of Qwen3.8-Flash-Next
 ([turboderp/Qwen3.8-Flash-Next-exl3](https://huggingface.co/turboderp/Qwen3.8-Flash-Next-exl3)) into the pack layout
 that [mlx-serve](https://github.com/ddalcu/mlx-serve) loads with the [turboexl3](https://github.com/davidtai/turboexl3)
-quant plugin. They built these four packs:
+quant plugin (mlx-serve at the branch [`qwen38-exl3-full`](https://github.com/davidtai/mlx-serve/tree/qwen38-exl3-full)
+of davidtai/mlx-serve, until the `qwen38_exl3` model plugin replaces it). They built these four packs:
 
 - [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-2.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-2.05-mlx-serve)
 - [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-3.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-3.05-mlx-serve)
