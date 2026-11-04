@@ -6,10 +6,13 @@ that [mlx-serve](https://github.com/ddalcu/mlx-serve) loads with the [turboexl3]
 quant plugin (mlx-serve at the branch [`qwen38-exl3-full`](https://github.com/davidtai/mlx-serve/tree/qwen38-exl3-full)
 of davidtai/mlx-serve, until the `qwen38_exl3` model plugin replaces it). They built these four packs:
 
-- [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-2.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-2.05-mlx-serve)
-- [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-3.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-3.05-mlx-serve)
-- [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-4.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-4.05-mlx-serve)
-- [OpensourceWTF/Qwen3.8-Flash-Next-EXL3-5.05-mlx-serve](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-EXL3-5.05-mlx-serve)
+- [OpensourceWTF/Qwen3.8-Flash-Next-exl3@2.05bpw](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-exl3/tree/2.05bpw)
+- [OpensourceWTF/Qwen3.8-Flash-Next-exl3@3.05bpw](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-exl3/tree/3.05bpw)
+- [OpensourceWTF/Qwen3.8-Flash-Next-exl3@4.05bpw](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-exl3/tree/4.05bpw)
+- [OpensourceWTF/Qwen3.8-Flash-Next-exl3@5.05bpw](https://huggingface.co/OpensourceWTF/Qwen3.8-Flash-Next-exl3/tree/5.05bpw)
+
+The branches leave out the n-gram table, `ngram_embedding.safetensors`: each branch's card says how to get it from
+turboderp's branch (for 2.05 and 3.05, with this repo's header step).
 
 The scripts copy bytes. They do not quantize. Only three things change form: unquantized f16 tensors become bf16 (round
 to nearest even), the shape label of the `conv1d` weights changes, and the header of a sharded n-gram table is rewritten.
@@ -69,7 +72,7 @@ The names keep the `q2` suffix because these copies built the 2.05 pack. They ar
    not download the base pack's `README.md`, because the script links every `README.md` that it finds in the base folder.
 
    ```sh
-   hf download OpensourceWTF/Qwen3.8-Flash-Next-EXL3-4.05-mlx-serve \
+   hf download OpensourceWTF/Qwen3.8-Flash-Next-exl3 --revision 4.05bpw \
      config.json model.safetensors.index.json generation_config.json tokenizer.json tokenizer_config.json \
      chat_template.jinja vocab.json merges.txt LICENSE trunk-model-vision.safetensors --local-dir base
    ```
@@ -165,7 +168,7 @@ Run it. The inputs other than `--src` download from Hugging Face:
 PY=python3                # a Python 3 that has numpy
 hf download turboderp/Qwen3.8-Flash-Next-exl3 mtp_hyper_connection_mixer_patch.safetensors \
   --revision 7cef615f7fd3681295b68848018876dfabc336c7 --local-dir patch
-hf download OpensourceWTF/Qwen3.8-Flash-Next-EXL3-4.05-mlx-serve trunk-exl3-carry.safetensors --local-dir ref
+hf download OpensourceWTF/Qwen3.8-Flash-Next-exl3 --revision 4.05bpw trunk-exl3-carry.safetensors --local-dir ref
 
 $PY -I history/rebuild_505_mixer.py --src pack505 --patch patch/mtp_hyper_connection_mixer_patch.safetensors \
     --ref ref --out pack505-tdmixer       # prints MIXER_REBUILD_OK at the end
@@ -179,7 +182,7 @@ To check the published 5.05 carry shard with downloaded files only, give the scr
 index and config as `--src`:
 
 ```sh
-hf download OpensourceWTF/Qwen3.8-Flash-Next-EXL3-5.05-mlx-serve trunk-exl3-carry.safetensors \
+hf download OpensourceWTF/Qwen3.8-Flash-Next-exl3 --revision 5.05bpw trunk-exl3-carry.safetensors \
   model.safetensors.index.json config.json --local-dir pub505
 $PY -I history/rebuild_505_mixer.py --src pub505 --patch patch/mtp_hyper_connection_mixer_patch.safetensors \
     --ref ref --out check505
