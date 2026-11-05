@@ -10,7 +10,7 @@ Copies bytes; quantizes nothing. The tensor mapping is the Qwen packs' (restack_
   * the names stay the checkpoint's (`model.layers.N.self_attn.q_proj`, `lm_head`, ...).
 Each output shard holds the tensors of the source shard of the same name, in the same order. config.json is the source's
 without `quantization_config`, plus `trunk_quant` (the plugin's claim marker). The tokenizer and template files are hard
-links. After writing, every output tensor is read back and compared with its source bytes.
+links, but tokenizer_config.json, written without its short `chat_template` (see `write_tokenizer_config`). After writing, every output tensor is read back and compared with its source bytes.
 
   python3 -I ripple_exl3_to_mlx_serve.py --src <exllamav3 output dir> --out <pack dir> [--source-tag <tag>] [--check]
 
@@ -21,7 +21,7 @@ import argparse, hashlib, json, os, struct, sys
 MUL1 = 0x83DCD12D
 EXL3_LEAVES = {"trellis", "suh", "svh", "mul1"}
 NEW_LEAF = {"trellis": ("weight", "U16"), "suh": ("scales", "F16"), "svh": ("biases", "F16")}
-LINKED = ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "chat_template.jinja",
+LINKED = ("tokenizer.json", "special_tokens_map.json", "chat_template.jinja",
           "generation_config.json", "LICENSE", "README.md")
 CHUNK = 64 << 20
 
@@ -139,6 +139,21 @@ def check_shard(src_path, dst_path, items):
     return len(items)
 
 
+def write_tokenizer_config(src, out):
+    """tokenizer_config.json without its `chat_template` where chat_template.jinja exists. The release ships both: a
+    204-character template in tokenizer_config.json (no reasoning history, no tool prompt) and the full one in
+    chat_template.jinja, which transformers renders. mlx-serve reads tokenizer_config.json's first, so dropping it there
+    makes the server render what transformers renders. Every other key is the source's."""
+    tc = json.load(open(os.path.join(src, "tokenizer_config.json")))
+    if os.path.exists(os.path.join(src, "chat_template.jinja")):
+        tc.pop("chat_template", None)
+    d = os.path.join(out, "tokenizer_config.json")
+    if os.path.exists(d):
+        os.unlink(d)
+    with open(d, "w") as f:
+        json.dump(tc, f, indent=2, ensure_ascii=False); f.write("\n")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--src", required=True); ap.add_argument("--out", required=True)
@@ -172,6 +187,7 @@ def main():
             s, d = os.path.join(a.src, n), os.path.join(a.out, n)
             if os.path.exists(s) and not os.path.exists(d):
                 os.link(s, d)
+        write_tokenizer_config(a.src, a.out)
     print(f"done: {checked} tensors checked, {total / 2**30:.2f} GiB")
 
 
