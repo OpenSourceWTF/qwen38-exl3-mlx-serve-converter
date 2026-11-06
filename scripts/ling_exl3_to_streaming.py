@@ -628,7 +628,7 @@ class Converter:
                 os.link(sp, dp)
                 linked.append(f)
         receipt = {'what': f'{p["repo"]}@{p["branch"]} ({p["revision"]}) as a streaming EXL3 pack for turboexl3_ling: '
-                           f'the routed experts of model layers {self.first}..{self.mtp - 1} in experts.bin (a4k, bank '
+                           f'the routed experts of model layers {self.first}..{self.mtp - 1} in experts.bin ({self.layout}, bank '
                            f'layer = model layer - {self.first}), the rest byte for byte in the -nonexpert shards and '
                            f'mtp-nonbank.safetensors (layer {self.mtp}, the MTP layer)',
                    'source': {'repo': p['repo'], 'branch': p['branch'], 'revision': p['revision']},
