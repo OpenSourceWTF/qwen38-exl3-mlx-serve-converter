@@ -4,14 +4,17 @@ turboexl3_ling's copy of mlx-serve's expert streamer reads. It copies bytes and 
 
 What it writes, in --out:
 - experts.bin: the routed experts of trunk layers 4..71 (bank layer b = model layer - 4), 512 experts a layer, as
-  bank-v2 records in the a4k layout (turboexl3_ds41's expert/a4k.zig and assemble_sc281_a4k.py): per record the nine
-  segments gate code, rout, rin, up code, rout, rin, down code, rout, rin (code = exllamav3 trellis I16
-  [in/16, out/16, 16K], rout = svh F16 [out], rin = suh F16 [in]); on disk a zero lead of (-(the gate/up scales)) mod
-  4096, the gate/up span [gate.rout gate.rin up.rout up.rin gate.code up.code], the down span [down.code down.rout
-  down.rin], zero padding to 4096. Every expert's three mul1 words are checked equal to 0x83DCD12D and dropped.
-- expert-manifest-v2.json (mtplx-expert-manifest-v2, sidecar.layout "a4k") and expert-manifest.json (the v1 runtime
-  manifest, absolute segment offsets), in the key structure of the DeepSeek-V4.1 streaming packs (bankv2.py,
-  build_v1_manifest.py, assemble_sc281_a4k.py).
+  bank-v2 records: per record the nine segments gate code, rout, rin, up code, rout, rin, down code, rout, rin (code =
+  exllamav3 trellis I16 [in/16, out/16, 16K], rout = svh F16 [out], rin = suh F16 [in]). The plan's layout:
+  - classic (the default; mlx-serve's expert/bank.zig layerSegments, bankv2.py): the nine segments back to back in that
+    order from offset 0, the record zero-padded to 4096;
+  - a4k (turboexl3_ds41's expert/a4k.zig, assemble_sc281_a4k.py): a zero lead of (-(the gate/up scales)) mod 4096, the
+    gate/up span [gate.rout gate.rin up.rout up.rin gate.code up.code], the down span [down.code down.rout down.rin],
+    zero padding to 4096.
+  Every expert's three mul1 words are checked equal to 0x83DCD12D and dropped. K is a number per layer (2.5 or 2).
+- expert-manifest-v2.json (mtplx-expert-manifest-v2; `sidecar.layout` "a4k" only in an a4k bank) and
+  expert-manifest.json (the v1 runtime manifest, absolute segment offsets), in the key structure of the DeepSeek-V4.1
+  streaming packs (bankv2.py, build_v1_manifest.py, assemble_sc281_a4k.py).
 - model-000NN-of-000MM-nonexpert.safetensors: each source shard's tensors other than the routed experts and the MTP
   layer, byte for byte (names, dtypes, shapes unchanged); mtp-nonbank.safetensors: every tensor of the MTP layer
   (model.layers.<num_hidden_layers>.*), its experts included; model.safetensors.index.json naming all of them.
@@ -25,7 +28,7 @@ each part compared byte for byte with the source span read again, the lead and t
 sha256 checked; each non-expert file is read back against the source tensors.
 
 Usage (on the box):
-  ling_exl3_to_streaming.py plan  --src DIR --rev 2.60bpw --plan PLAN.json        (HF tree + headers -> plan)
+  ling_exl3_to_streaming.py plan  --src DIR --rev 2.60bpw --plan PLAN.json [--layout classic|a4k]   (HF -> plan)
   ling_exl3_to_streaming.py run   --src DIR --out DIR --plan PLAN.json [--only SHARD] [--watch SECONDS] [--threads N]
   ling_exl3_to_streaming.py finalize --src DIR --out DIR --plan PLAN.json
 """
@@ -151,6 +154,17 @@ def classic_segments(K, hidden, inter):
     return segs, off
 
 
+def record_layout(K, hidden, inter, layout):
+    """The record geometry in `layout`: classic = bankv2.layer_segments (lead 0, extent = the logical bytes)."""
+    if layout == 'a4k':
+        return a4k_layer(K, hidden, inter)
+    if layout != 'classic':
+        raise ValueError(f'layout {layout!r} (classic or a4k)')
+    segs, logical = classic_segments(K, hidden, inter)
+    return {'segments': segs, 'lead': 0, 'extent': logical, 'record_bytes': (logical + ALIGN - 1) // ALIGN * ALIGN,
+            'logical_bytes': logical}
+
+
 def a4k_layer(K, hidden, inter):
     """The a4k geometry (expert/a4k.zig `geometry`): segments in component order at their a4k offsets, lead, extent,
     record_bytes, logical_bytes."""
@@ -174,10 +188,10 @@ def a4k_layer(K, hidden, inter):
             'logical_bytes': logical}
 
 
-def layer_table(k_by_layer, hidden, inter, n_experts):
+def layer_table(k_by_layer, hidden, inter, n_experts, layout):
     out, base = [], 0
     for b, K in enumerate(k_by_layer):
-        g = a4k_layer(K, hidden, inter)
+        g = record_layout(K, hidden, inter, layout)
         out.append({'layer': b, 'K': K, 'record_bytes': g['record_bytes'], 'logical_bytes': g['logical_bytes'],
                     'base_offset': base, 'segments': g['segments'], '_lead': g['lead'], '_extent': g['extent']})
         base += n_experts * g['record_bytes']
@@ -241,15 +255,15 @@ def make_plan(args):
             'codebook': cfg['quantization_config'].get('codebook'), 'codebook_multiplier': MUL1_MULT,
             'model_key': MODEL_KEY, 'hidden': cfg['hidden_size'], 'inter': cfg['moe_intermediate_size'],
             'n_experts': cfg['num_experts'], 'first_moe_layer': first, 'num_hidden_layers': n_layers,
-            'mtp_layer': n_layers, 'k_by_layer': k_by_layer, 'shards': shards,
+            'mtp_layer': n_layers, 'layout': args.layout, 'k_by_layer': k_by_layer, 'shards': shards,
             'layer_shards': {str(L): sorted(v) for L, v in sorted(homes.items())}}
     if plan['codebook'] != 'mul1':
         raise SystemExit(f'codebook {plan["codebook"]} (want mul1)')
     atomic_json(args.plan, plan)
-    table, total = layer_table(k_by_layer, plan['hidden'], plan['inter'], plan['n_experts'])
+    table, total = layer_table(k_by_layer, plan['hidden'], plan['inter'], plan['n_experts'], plan['layout'])
     for K in sorted(set(k_by_layer)):
         t = next(x for x in table if x['K'] == K)
-        log(f'PLAN K{K}: record {t["record_bytes"]} B (logical {t["logical_bytes"]}, lead {t["_lead"]}, extent {t["_extent"]})')
+        log(f'PLAN {plan["layout"]} K{K}: record {t["record_bytes"]} B (logical {t["logical_bytes"]}, lead {t["_lead"]}, extent {t["_extent"]})')
     log(f'PLAN {args.plan}: revision {rev}, {len(shards)} shards, {len(k_by_layer)} bank layers, experts.bin {total} B')
 
 
@@ -262,13 +276,16 @@ class Converter:
         p = self.plan
         self.src, self.out = os.path.abspath(args.src), os.path.abspath(args.out)
         self.first, self.mtp = p['first_moe_layer'], p['mtp_layer']
-        self.table, self.total = layer_table(p['k_by_layer'], p['hidden'], p['inter'], p['n_experts'])
+        self.layout = p.get('layout', 'classic')
+        self.table, self.total = layer_table(p['k_by_layer'], p['hidden'], p['inter'], p['n_experts'], self.layout)
         os.makedirs(os.path.join(self.out, 'receipts'), exist_ok=True)
         self.state_path = os.path.join(self.out, 'receipts', 'state.json')
         self.state = json.load(open(self.state_path)) if os.path.exists(self.state_path) else {
-            'repo': p['repo'], 'revision': p['revision'], 'shards': {}}
+            'repo': p['repo'], 'revision': p['revision'], 'layout': self.layout, 'shards': {}}
         if self.state.get('revision') != p['revision']:
             raise SystemExit(f'state.json belongs to revision {self.state.get("revision")}, the plan is {p["revision"]}')
+        if self.state.get('layout', 'a4k') != self.layout:
+            raise SystemExit(f'state.json is a {self.state.get("layout", "a4k")} bank, the plan is {self.layout}')
 
     def bank_layer(self, L):
         return L - self.first
@@ -573,16 +590,18 @@ class Converter:
                            'exllamav3': f'{p["exllamav3"]} (the branch quantization_config version)'},
             },
             'dims': {'hidden': p['hidden'], 'inter': p['inter'], 'n_experts': p['n_experts'], 'n_layers': len(self.table)},
-            'sidecar': {'file': 'experts.bin', 'alignment': ALIGN, 'size': self.total, 'layout': 'a4k'},
+            'sidecar': {'file': 'experts.bin', 'alignment': ALIGN, 'size': self.total},
             'layers': [public(t) for t in self.table],
             'records': [{k: r[k] for k in ('layer', 'expert', 'sidecar_offset', 'record_bytes', 'logical_bytes', 'sha256',
                                            'stats')} for r in records],
             'artifact': {'record_count': len(records), 'routed_expert_bytes': self.total},
             'parity': {'receipts': 'receipts', 'all_pass': all(r['pass'] for r in records)},
-            'relayout': {'layout': 'a4k', 'from': f'{p["repo"]}@{p["branch"]} ({p["revision"]}), written a4k directly',
-                         'tool': 'ling_exl3_to_streaming.py', 'disk_order': [COMPONENTS[c] for c in DISK],
-                         'built_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())},
         }
+        if self.layout == 'a4k':
+            v2['sidecar']['layout'] = 'a4k'
+            v2['relayout'] = {'layout': 'a4k', 'from': f'{p["repo"]}@{p["branch"]} ({p["revision"]}), written a4k directly',
+                              'tool': 'ling_exl3_to_streaming.py', 'disk_order': [COMPONENTS[c] for c in DISK],
+                              'built_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
         v1recs = []
         for r in records:
             t = self.table[r['layer']]
@@ -616,7 +635,9 @@ class Converter:
                    'first_moe_layer': self.first, 'k_by_layer': p['k_by_layer'],
                    'layers': [{'layer': t['layer'], 'K': t['K'], 'record_bytes': t['record_bytes'], 'lead': t['_lead'],
                                'extent': t['_extent'], 'logical': t['logical_bytes']} for t in self.table],
-                   'disk_order': [COMPONENTS[c] for c in DISK], 'experts_bin': self.total,
+                   'layout': self.layout,
+                   'disk_order': [COMPONENTS[c] for c in (DISK if self.layout == 'a4k' else range(9))],
+                   'experts_bin': self.total,
                    'records_verified': sum(r['pass'] for r in records), 'nonexpert_files': len(nonexpert_files),
                    'mtp': {k: v for k, v in mtp_info.items() if k != 'names'}, 'linked_files': linked,
                    'built_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
@@ -673,17 +694,19 @@ class Converter:
 
 
 def check_v2(m, sidecar_size):
-    """bankv2.check_manifest's format checks at the a4k geometry and a fractional K."""
+    """bankv2.check_manifest's format checks at the manifest's layout (classic unless sidecar.layout says a4k) and a
+    fractional K."""
     p = []
     d = m['dims']
     base = 0
     if len(m['layers']) != d['n_layers']:
         p.append('layer table length != dims.n_layers')
     for b, t in enumerate(m['layers']):
-        g = a4k_layer(t['K'], d['hidden'], d['inter'])
+        layout = m['sidecar'].get('layout', 'classic')
+        g = record_layout(t['K'], d['hidden'], d['inter'], layout)
         if t['layer'] != b or t['segments'] != g['segments'] or t['record_bytes'] != g['record_bytes'] or \
                 t['logical_bytes'] != g['logical_bytes'] or t['base_offset'] != base:
-            p.append(f'layer {b}: not the a4k geometry at K={t["K"]}')
+            p.append(f'layer {b}: not the {layout} geometry at K={t["K"]}')
         base += d['n_experts'] * t['record_bytes']
     if m['sidecar']['size'] != base or sidecar_size != base:
         p.append(f'sidecar size {m["sidecar"]["size"]} / file {sidecar_size} != {base}')
@@ -708,6 +731,7 @@ def main():
     ap.add_argument('--out')
     ap.add_argument('--plan', required=True)
     ap.add_argument('--rev')
+    ap.add_argument('--layout', default='classic', choices=('classic', 'a4k'))
     ap.add_argument('--only')
     ap.add_argument('--watch', type=int, default=0, help='poll interval seconds; 0 = one pass')
     ap.add_argument('--threads', type=int, default=8)
